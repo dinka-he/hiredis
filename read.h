@@ -92,6 +92,13 @@ typedef struct redisReplyObjectFunctions {
     void (*freeObject)(void*);
 } redisReplyObjectFunctions;
 
+typedef struct redisReaderBufQ{
+    struct{
+        struct redisReaderBufQ *sqe_next; /* must be named sqe_next (see SIMPLEQ_ENTRY) */
+    } next;
+    char *buf;
+} redisReaderBufQ;
+
 typedef struct redisReader {
     int err; /* Error flags, 0 when there is no error */
     char errstr[128]; /* String representation of error when applicable */
@@ -107,9 +114,15 @@ typedef struct redisReader {
 
     int ridx; /* Index of current read task */
     void *reply; /* Temporary reply pointer */
-
     redisReplyObjectFunctions *fn;
     void *privdata;
+    int useQ;
+    /* only used if(useQ) */
+    struct{
+        /* see SIMPLEQ_HEAD for naming requirements */
+        struct redisReaderBufQ *sqh_first;
+        struct redisReaderBufQ **sqh_last;
+    } list;
 } redisReader;
 
 /* Public API for the protocol parser. */

@@ -46,6 +46,7 @@
 #include "read.h"
 #include "sds.h"
 #include "win32.h"
+#include "queue.h"
 
 /* Initial size of our nested reply stack and how much we grow it when needd */
 #define REDIS_READER_STACK_SIZE 9
@@ -650,6 +651,12 @@ void redisReaderFree(redisReader *r) {
         hi_free(r->task);
     }
 
+    if (r->useQ) {
+        redisReaderBufQ *i;
+        SIMPLEQ_FOREACH(i, &r->list, next)
+            hi_free(i);
+        SIMPLEQ_INIT(&r->list);
+    }
     sdsfree(r->buf);
     hi_free(r);
 }
@@ -661,22 +668,38 @@ int redisReaderFeed(redisReader *r, const char *buf, size_t len) {
     if (r->err)
         return REDIS_ERR;
 
-    /* Copy the provided buffer. */
-    if (buf != NULL && len >= 1) {
-        /* Destroy internal buffer when it is empty and is quite large. */
-        if (r->len == 0 && r->maxbuf != 0 && sdsavail(r->buf) > r->maxbuf) {
-            sdsfree(r->buf);
-            r->buf = sdsempty();
-            if (r->buf == 0) goto oom;
-
-            r->pos = 0;
-        }
-
-        newbuf = sdscatlen(r->buf,buf,len);
+    if (r->useQ) {
+        /* initialize r->list if needed */
+        if (SIMPLEQ_EMPTY(&r->list))
+            SIMPLEQ_INIT(&r->list);
+        redisReaderBufQ *b;
+        b = hi_calloc(1, sizeof(*b));
+        if (b == NULL) goto oom;
+        b->buf = sdsempty();
+        if (b->buf == NULL) goto oom;
+        newbuf = sdscatlen(b->buf, buf, len);
         if (newbuf == NULL) goto oom;
+        b->buf = newbuf;
+        SIMPLEQ_INSERT_TAIL(&r->list, b, next);
+    }
+    else{
+        /* Copy the provided buffer. */
+        if (buf != NULL && len >= 1) {
+            /* Destroy internal buffer when it is empty and is quite large. */
+            if (r->len == 0 && r->maxbuf != 0 && sdsavail(r->buf) > r->maxbuf) {
+                sdsfree(r->buf);
+                r->buf = sdsempty();
+                if (r->buf == 0) goto oom;
 
-        r->buf = newbuf;
-        r->len = sdslen(r->buf);
+                r->pos = 0;
+            }
+
+            newbuf = sdscatlen(r->buf,buf,len);
+            if (newbuf == NULL) goto oom;
+
+            r->buf = newbuf;
+            r->len = sdslen(r->buf);
+        }
     }
 
     return REDIS_OK;
